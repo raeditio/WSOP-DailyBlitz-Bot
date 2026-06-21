@@ -1,61 +1,93 @@
+from dotenv import load_dotenv
+import os
 import cv2
 import numpy as np
 import pyautogui
 from treys import Card, Evaluator
-from ultralytics import YOLO # pip install ultralytics
+from inference_sdk import InferenceHTTPClient # pip install inference-sdk
 
-# Load your trained YOLO model here (Updated to match the yolo26 folder!)
-MODEL_PATH = 'model/best.pt' 
+# Roboflow Configuration
+load_dotenv()
+RF_API_KEY = os.environ.get("ROBOFLOW_API_KEY")
+MODEL_ID = "poker-card-doocc/3"
 
-def scan_board_yolo(img_rgb, model, conf_threshold=0.60, debug=False):
+CLIENT = InferenceHTTPClient(
+    api_url="https://serverless.roboflow.com",
+    api_key=RF_API_KEY
+)
+
+def scan_board_yolo(img_rgb, client, model_id, conf_threshold=0.60, debug=False):
     """
-    Scans the board using a trained YOLO object detection model.
-    It is extremely fast and completely immune to minor pixel/scaling differences.
+    Scans the board using the hosted Roboflow Inference API.
     """
-    print(f"\n--- SCANNING BOARD (YOLO) ---")
+    print(f"\n--- SCANNING BOARD (ROBOFLOW) ---")
     if img_rgb is None:
         return []
         
     h, w = img_rgb.shape[:2]
     
-    # Run inference on the image
-    results = model(img_rgb, conf=conf_threshold, verbose=False)
+    # Run inference via Roboflow Inference SDK (passing the numpy array directly in memory)
+    results = client.infer(img_rgb, model_id=model_id)
     
     matches = []
     
-    # Extract bounding boxes and labels
-    for result in results:
-        boxes = result.boxes
-        for box in boxes:
-            # Get box coordinates, confidence, and class label
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            confidence = float(box.conf[0])
-            class_id = int(box.cls[0])
-            label = model.names[class_id] # e.g., 'AS', '10H'
-            
-            # Calculate center point
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-            
-            # Determine Zone based on screen coordinates rather than cropped ROIs
-            if cy < h * 0.45:
-                zone_name = 'board'
-            elif cx < w * 0.50:
-                zone_name = 'left'
-            else:
-                zone_name = 'right'
-                
-            matches.append({
-                'label': label,
-                'score': confidence,
-                'cx': cx,
-                'cy': cy,
-                'zone': zone_name,
-                'box': (x1, y1, x2, y2)
-            })
+    # Check if predictions exist in the response
+    if 'predictions' not in results:
+        return matches
 
-    # Sort matches left-to-right based on X coordinate for cleaner evaluation
+    # Extract bounding boxes and labels
+    for pred in results['predictions']:
+        confidence = float(pred['confidence'])
+        
+        # Filter out predictions that fall below our confidence threshold
+        if confidence < conf_threshold:
+            continue
+            
+        cx = int(pred['x'])
+        cy = int(pred['y'])
+        bw = int(pred['width'])
+        bh = int(pred['height'])
+        
+        # Calculate standard x1, y1, x2, y2 bounding box coordinates
+        x1 = int(cx - bw / 2)
+        y1 = int(cy - bh / 2)
+        x2 = int(cx + bw / 2)
+        y2 = int(cy + bh / 2)
+        
+        confidence = float(pred['confidence'])
+        label = pred['class'] # e.g., '10H', 'AS'
+        
+        # Determine Zone based on vertical position
+        if cy < h * 0.45:
+            zone_name = 'board'
+        else:
+            zone_name = 'hole' # We'll dynamically assign left/right after sorting
+            
+        matches.append({
+            'label': label,
+            'score': confidence,
+            'cx': cx,
+            'cy': cy,
+            'zone': zone_name,
+            'box': (x1, y1, x2, y2)
+        })
+
+    # Sort matches left-to-right based on X coordinate
     matches = sorted(matches, key=lambda x: x['cx'])
+
+    # Dynamically assign left/right hands to the hole cards based on their actual positions
+    hole_matches = [m for m in matches if m['zone'] == 'hole']
+    if len(hole_matches) == 4:
+        # Because matches are sorted left-to-right, the first 2 are definitely the left hand
+        hole_matches[0]['zone'] = 'left'
+        hole_matches[1]['zone'] = 'left'
+        hole_matches[2]['zone'] = 'right'
+        hole_matches[3]['zone'] = 'right'
+    elif len(hole_matches) > 0:
+        # Fallback split based on their average X coordinate if it didn't find exactly 4
+        avg_x = sum(m['cx'] for m in hole_matches) / len(hole_matches)
+        for m in hole_matches:
+            m['zone'] = 'left' if m['cx'] < avg_x else 'right'
 
     if debug:
         debug_img = img_rgb.copy()
@@ -146,14 +178,6 @@ if __name__ == "__main__":
 
     pyautogui.FAILSAFE = True 
     
-    try:
-        model = YOLO(MODEL_PATH)
-        print(f"Successfully loaded YOLO model: {MODEL_PATH}")
-    except Exception as e:
-        print(f"Error loading YOLO model: {e}")
-        print("You must train a YOLO26 model and place 'best.pt' in the same folder.")
-        exit(1)
-    
     print("Script ready. Switch to your Chrome window!")
     print("Press [R] to execute a single round (Scan & Click).")
     print("Press [Q] to terminate the script.")
@@ -173,7 +197,7 @@ if __name__ == "__main__":
                 img_rgb = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
                 
                 # Use YOLO scan with a lower threshold to see if it's catching ANYTHING
-                matches = scan_board_yolo(img_rgb, model, conf_threshold=0.25, debug=True) 
+                matches = scan_board_yolo(img_rgb, CLIENT, MODEL_ID, conf_threshold=0.25, debug=True) 
                 
                 if matches and len(matches) == 9:
                     evaluate_and_click(matches)
