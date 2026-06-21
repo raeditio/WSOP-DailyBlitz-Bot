@@ -4,23 +4,22 @@ import pyautogui
 from treys import Card, Evaluator
 from ultralytics import YOLO # pip install ultralytics
 
-# Fix 1: Correct the model path to exactly match where the training script saved it
-MODEL_PATH = 'runs/detect/poker_bot/yolo26_poker/weights/best.pt' 
+# Load your trained YOLO model here (Updated to match the yolo26 folder!)
+MODEL_PATH = 'model/best.pt' 
 
-def scan_board_yolo(img_bgr, model, conf_threshold=0.60, debug=False):
+def scan_board_yolo(img_rgb, model, conf_threshold=0.60, debug=False):
     """
     Scans the board using a trained YOLO object detection model.
     It is extremely fast and completely immune to minor pixel/scaling differences.
     """
     print(f"\n--- SCANNING BOARD (YOLO) ---")
-    if img_bgr is None:
+    if img_rgb is None:
         return []
         
-    h, w = img_bgr.shape[:2]
+    h, w = img_rgb.shape[:2]
     
-    # Fix: Removed imgsz=1080. Let YOLO use its native 640x640 training resolution.
-    # Also explicitly handling the BGR color space that OpenCV uses.
-    results = model(img_bgr, conf=conf_threshold, verbose=False)
+    # Run inference on the image
+    results = model(img_rgb, conf=conf_threshold, verbose=False)
     
     matches = []
     
@@ -32,7 +31,7 @@ def scan_board_yolo(img_bgr, model, conf_threshold=0.60, debug=False):
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
-            label = model.names[class_id] # e.g., 'Ac', 'Th'
+            label = model.names[class_id] # e.g., 'AS', '10H'
             
             # Calculate center point
             cx = (x1 + x2) // 2
@@ -59,7 +58,7 @@ def scan_board_yolo(img_bgr, model, conf_threshold=0.60, debug=False):
     matches = sorted(matches, key=lambda x: x['cx'])
 
     if debug:
-        debug_img = img_bgr.copy()
+        debug_img = img_rgb.copy()
         for m in matches:
             x1, y1, x2, y2 = m['box']
             color = (0, 255, 0) if m['zone'] == 'board' else (255, 0, 0)
@@ -82,12 +81,15 @@ def scan_board_yolo(img_bgr, model, conf_threshold=0.60, debug=False):
     return matches
 
 def normalize_card(label):
-    """Converts user filenames to Treys library standard (e.g. '10-heart' -> 'Th', '1-club' -> 'Ac')"""
-    label = label.lower().replace('1-', 'a-').replace('10', 't').replace('-', '')
-    label = label.replace('club', 'c').replace('heart', 'h').replace('diamond', 'd').replace('spade', 's')
+    """Converts Roboflow dataset format (e.g. '10H', 'AS') to Treys library standard ('Th', 'As')"""
+    label = label.upper()
     
-    if len(label) >= 2:
-        return label[0].upper() + label[-1].lower()
+    # Handle '10' becoming 'T' and lowercase the suit
+    if len(label) == 3 and label.startswith('10'):
+        return 'T' + label[-1].lower()
+    elif len(label) == 2:
+        return label[0] + label[1].lower()
+        
     return label
 
 def evaluate_and_click(matches):
@@ -149,7 +151,7 @@ if __name__ == "__main__":
         print(f"Successfully loaded YOLO model: {MODEL_PATH}")
     except Exception as e:
         print(f"Error loading YOLO model: {e}")
-        print("You must train a YOLOv8 model and place 'best.pt' in the same folder.")
+        print("You must train a YOLO26 model and place 'best.pt' in the same folder.")
         exit(1)
     
     print("Script ready. Switch to your Chrome window!")
@@ -168,11 +170,10 @@ if __name__ == "__main__":
                 print("\n--- R Pressed: Executing Round ---")
                 
                 sct_img = sct.grab(monitor)
-                # Ensure we are passing standard BGR format to OpenCV/YOLO
-                img_bgr = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+                img_rgb = cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
                 
                 # Use YOLO scan with a lower threshold to see if it's catching ANYTHING
-                matches = scan_board_yolo(img_bgr, model, conf_threshold=0.25, debug=True) 
+                matches = scan_board_yolo(img_rgb, model, conf_threshold=0.25, debug=True) 
                 
                 if matches and len(matches) == 9:
                     evaluate_and_click(matches)
