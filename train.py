@@ -29,9 +29,9 @@ def train_model(dataset_dir):
 def load_dataset():
     load_dotenv()
     rf = Roboflow(api_key=os.environ.get("ROBOFLOW_API_KEY"))
-    project = rf.workspace("daily-blitz-training").project("autolabel_dblitz-dloer")
+    project = rf.workspace("raeditio").project("WSOP")
     version = project.version(1)
-    dataset = version.download("yolov8")
+    dataset = version.download("yolo26")
     return dataset
 
 def main():
