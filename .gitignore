@@ -1,1 +1,17 @@
 .env
+build/
+dist/
+test/
+runs/
+model/
+Output/
+POKER-CARD-14/
+app_icon.ico
+build.sh
+debug_cascaded_output.jpg
+generate_icon.py
+installer.iss
+model_upload.py
+train.ipynb
+train.py
+PokerVisionBot.spec
